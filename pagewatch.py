@@ -21,6 +21,10 @@
   webhook      内置, 配 PAGEWATCH_WEBHOOK 后自动启用, POST JSON
   自定义插件   把含 send(title, content) 函数的 .py 文件放到
                PAGEWATCH_HOME/plugins/ 下, 文件名即渠道名, 立即可用
+
+数据源插件 (页面之外的数据, 如电商 API):
+  把含 fetch(entry) -> str 函数的 .py 放到 PAGEWATCH_HOME/plugins/sources/ 下,
+  add 时 --source 插件名 即可, 示例见 examples/sources/jd_price.py
 """
 
 import argparse
@@ -72,6 +76,36 @@ def fetch_text(url: str, selector: str | None) -> str:
         return r.text.strip()
     nodes = BeautifulSoup(r.text, "html.parser").select(selector)
     return "\n".join(n.get_text(strip=True) for n in nodes if n.get_text(strip=True))
+
+
+def load_source_plugins() -> dict:
+    """数据源插件: PAGEWATCH_HOME/plugins/sources/*.py, 需含 fetch(entry) -> str"""
+    srcs = {}
+    pdir = STORE.parent / "plugins" / "sources"
+    if pdir.exists():
+        for f in sorted(pdir.glob("*.py")):
+            try:
+                spec = importlib.util.spec_from_file_location(f.stem, f)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                if callable(getattr(mod, "fetch", None)):
+                    srcs[f.stem] = mod.fetch
+                else:
+                    print(f"  [数据源插件] 跳过 {f.name}: 缺少 fetch(entry) 函数")
+            except Exception as ex:
+                print(f"  [数据源插件] 加载失败 {f.name}: {ex}")
+    return srcs
+
+
+def fetch_entry(e: dict) -> str:
+    """按监控项的 source 抓内容: html 内置, 其他走插件"""
+    src = e.get("source", "html")
+    if src == "html":
+        return fetch_text(e["url"], e.get("selector"))
+    plugin = load_source_plugins().get(src)
+    if plugin is None:
+        raise ValueError(f"未知数据源: {src} (内置: html; 可装插件到 plugins/sources/)")
+    return plugin(e)
 
 
 # ---------- 对比策略 ----------
@@ -155,7 +189,7 @@ def check_once(dry_run: bool = False) -> None:
     now = datetime.now().strftime("%m-%d %H:%M:%S")
     for name, e in data.items():
         try:
-            text = fetch_text(e["url"], e.get("selector"))
+            text = fetch_entry(e)
             digest = digest_of(text, e.get("compare", "raw"))
         except Exception as ex:
             print(f"[{now}] {name}  抓取失败: {ex}")
@@ -209,17 +243,20 @@ def cmd_add(args) -> None:
     if name in data and not args.force:
         sys.exit(f"{name} 已存在, 换个 --name 或加 --force 覆盖")
     digest_of("validate", args.compare)       # 提前校验策略写法, 报错更早更直观
+    if args.source != "html" and args.source not in load_source_plugins():
+        print(f"提示: 数据源 {args.source} 当前未安装 (plugins/sources/), 添加成功但检查时会报错")
     data[name] = {
         "url": args.url,
         "selector": args.selector,
         "interval_sec": parse_interval(args.interval),
         "compare": args.compare,
+        "source": args.source,
         "last_hash": None,
         "history": [],
     }
     save(data)
-    print(f"已添加: {name} -> {args.url} (selector={args.selector}, "
-          f"interval={args.interval}, compare={args.compare})")
+    print(f"已添加: {name} -> {args.url} (source={args.source}, "
+          f"selector={args.selector}, interval={args.interval}, compare={args.compare})")
 
 
 def cmd_list() -> None:
@@ -229,8 +266,8 @@ def cmd_list() -> None:
         return
     for name, e in data.items():
         last = e.get("last_check") or "从未检查"
-        print(f"- {name}  {e['url']}  interval={e['interval_sec']}s  "
-              f"compare={e.get('compare', 'raw')}  上次检查: {last}")
+        print(f"- {name}  {e['url']}  source={e.get('source', 'html')}  "
+              f"interval={e['interval_sec']}s  compare={e.get('compare', 'raw')}  上次检查: {last}")
 
 
 def cmd_remove(name: str) -> None:
@@ -251,6 +288,7 @@ def main() -> None:
     a.add_argument("--selector", default=None, help="CSS 选择器, 只监控该元素")
     a.add_argument("--interval", default="30m", help="检查间隔, 如 30s/10m/2h/1d")
     a.add_argument("--compare", default="raw", help="对比策略: raw/norm/num/regex:模式")
+    a.add_argument("--source", default="html", help="数据源: html(默认) 或 plugins/sources/ 下的插件名")
     a.add_argument("--name", default=None)
     a.add_argument("--force", action="store_true")
     a.set_defaults(fn=lambda x: cmd_add(x))

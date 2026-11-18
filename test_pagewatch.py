@@ -110,6 +110,21 @@ try:
     out = run("check", env_extra={"PAGEWATCH_NOTIFY": "nope"})
     expect("不存在的渠道给出提示", out, "未找到渠道")
 
+    # ---------- 新功能 3: 数据源插件 ----------
+    print("========== 数据源插件 ==========")
+    sdir = TMP / "plugins" / "sources"
+    sdir.mkdir(parents=True)
+    (sdir / "fake.py").write_text("def fetch(entry):\n    return 'FAKE-CONTENT-42'\n", encoding="utf-8")
+    out = run("add", "http://127.0.0.1:8765/", "--source", "fake", "--name", "src1", "--force")
+    expect("add --source fake", out, "source=fake")
+    out = run("check")
+    import hashlib
+    want = hashlib.sha256("FAKE-CONTENT-42".encode()).hexdigest()[:12]
+    expect("fake数据源真实接管了抓取", out, f"建立基线 ({want})")
+
+    out = run("add", "http://x.com", "--source", "nope", "--name", "bad")
+    expect("未安装的数据源给出提示", out, "未安装")
+
     # ---------- 边界 ----------
     print("========== 边界 ==========")
     srv.shutdown()

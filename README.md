@@ -111,6 +111,31 @@ def send(title: str, content: str) -> None:
 
 保存后立即生效，变更会自动推送到 telegram 渠道；插件报错只记日志，不影响其他渠道。
 
+## 数据源插件（盯页面之外的数据）
+
+很多场景要盯的不是 HTML：电商价格在 JS/接口里、API 返回的是 JSON。
+`plugins/sources/` 目录下的插件接管「怎么抓」，每个插件含一个
+`fetch(entry) -> str` 函数，文件名即数据源名，`add` 时用 `--source` 指定：
+
+```bash
+# 京东价格源示例 (仓库 examples/sources/jd_price.py)
+cp examples/sources/jd_price.py ~/.pagewatch/plugins/sources/
+pagewatch add https://item.jd.com/100012043978.html --source jd_price --compare num --name 京东显卡
+```
+
+```python
+# 自定义数据源骨架: ~/.pagewatch/plugins/sources/my_source.py
+def fetch(entry) -> str:
+    """entry 是监控项 dict (含 url 等字段), 返回任意文本"""
+    r = requests.get("https://your.api/data", timeout=10)
+    return r.json()["price"]
+```
+
+内置 `html` 数据源 = requests 抓页面 + CSS 选择器。
+京东/淘宝这类强反爬、需要登录态的站点：`jd_price` 插件支持 `JD_COOKIE`
+环境变量注入登录 Cookie；未登录时京东隐藏价格，插件会明确报错而不是给假数据。
+淘宝/天猫没有公开接口，建议走官方淘宝客 API 或等后续的浏览器渲染源。
+
 ## 数据存储
 
 所有监控项存为本地 JSON（含基线 hash、历史记录），默认位置 `~/.pagewatch/`。
@@ -130,7 +155,8 @@ export PAGEWATCH_HOME=/path/to/your/dir
 
 - [x] v0.1: add/list/remove/check/daemon + Server酱/Webhook 通知
 - [x] v0.2: 对比策略（raw/norm/num/regex）+ 通知渠道插件目录
-- [ ] JSON / RSS 数据源（盯 API 返回值）
+- [x] v0.3: 数据源插件目录（--source）+ 京东价格源示例（JD_COOKIE 登录态）
+- [ ] 浏览器渲染源（playwright 可选依赖，盯 JS 页面）
 - [ ] 变更动作钩子（`--on-change` 执行任意命令）
 - [ ] GitHub Action 版（push 驱动，无需常驻进程）
 - [ ] 变更 diff 高亮输出（只推送改了的那几行）
