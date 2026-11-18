@@ -181,13 +181,18 @@ def notify(title: str, content: str) -> list[str]:
 
 # ---------- 核心: 检查一轮 ----------
 
-def check_once(dry_run: bool = False) -> None:
+def check_once(dry_run: bool = False, only: list[str] | None = None) -> list[str]:
+    """检查一轮; only 给定时只检查这些监控项 (daemon 按各自 interval 调度用)"""
     data = load()
     if not data:
         print("watchlist 为空, 先 add 一个监控项")
-        return
+        return []
     now = datetime.now().strftime("%m-%d %H:%M:%S")
+    checked = []
     for name, e in data.items():
+        if only is not None and name not in only:
+            continue
+        checked.append(name)
         try:
             text = fetch_entry(e)
             digest = digest_of(text, e.get("compare", "raw"))
@@ -214,6 +219,7 @@ def check_once(dry_run: bool = False) -> None:
         e["last_check"] = now
     if not dry_run:
         save(data)
+    return checked
 
 
 # ---------- 常驻循环 ----------
@@ -229,10 +235,18 @@ def daemon() -> None:
         now_ts = time.time()
         due = [n for n, t in next_run.items() if t <= now_ts]
         if due:
-            check_once()
-            for n in due:                     # check_once 已刷新内容, 重新读 interval
-                next_run[n] = time.time() + load().get(n, {}).get("interval_sec", 1800)
-        time.sleep(min(5, max(1, min(next_run.values()) - time.time())))
+            fresh = load()                    # 每轮重读, 监控项可能被 add/remove
+            due = [n for n in due if n in fresh]
+            if due:
+                check_once(only=due)          # 只查到期的, 各自尊重自己的 interval
+                fresh = load()
+                for n in due:
+                    next_run[n] = time.time() + fresh.get(n, {}).get("interval_sec", 1800)
+            next_run = {n: t for n, t in next_run.items() if n in fresh}
+            if not next_run:
+                print("监控项已全部移除, daemon 退出")
+                return
+        time.sleep(min(3, max(1, min(next_run.values()) - time.time())))
 
 
 # ---------- 命令 ----------
