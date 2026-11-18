@@ -23,9 +23,10 @@ pagewatch daemon
 
 ## 特性
 
-- **轻**：单文件核心（约 200 行），依赖只有 `requests` + `beautifulsoup4`，无数据库、无 Docker、无 Web 界面
+- **轻**：单文件核心（约 300 行），依赖只有 `requests` + `beautifulsoup4`，无数据库、无 Docker、无 Web 界面
 - **精准**：CSS 选择器只盯页面局部，忽略广告和无关改版
-- **通知**：Server酱（微信）/ 通用 Webhook，环境变量配置；不配也能跑，结果打印到终端
+- **抗误报**：4 种对比策略（全文/归一化/仅数字/正则），时间戳抖动、文案变化都能过滤
+- **通知**：Server酱（微信）/ 通用 Webhook 内置；**插件目录**让你 20 行代码接入任意渠道
 - **可追溯**：每个监控项保留最近 20 次变更历史
 
 ## 安装
@@ -48,6 +49,9 @@ pip install -e .
 # 添加监控: 只盯价格元素, 每 30 分钟检查一次
 pagewatch add "https://example.com/gpu" --selector ".price" --interval 30m --name gpu
 
+# 盯价格数值: 页面文案乱变不管, 只有数字变了才算变更
+pagewatch add "https://example.com/gpu" --selector ".price" --compare num --name gpu
+
 # 查看监控列表
 pagewatch list
 
@@ -66,20 +70,46 @@ pagewatch remove gpu
 
 间隔格式：`30s` / `10m` / `2h` / `1d`。
 
-## 通知配置
+## 对比策略（解决误报）
 
-| 环境变量 | 说明 |
-|---|---|
-| `SERVERCHAN_SENDKEY` | [Server酱](https://sct.ftqq.com/) SendKey，推送到微信 |
-| `PAGEWATCH_WEBHOOK` | 通用 Webhook URL，变更时 POST `{"title", "content"}` JSON |
-
-两者都配则都发；都不配则只打印到终端。示例：
+| 策略 | 说明 | 适用场景 |
+|---|---|---|
+| `raw` | 全文对比（默认） | 页面完全静态 |
+| `norm` | 去空白去数字后对比 | 公告页带时间戳，日期变了不算变更 |
+| `num` | 只提取数字对比 | 盯价格/库存数，文案乱变不管 |
+| `regex:模式` | 只提取正则匹配内容对比 | 只盯页面上某一小段 |
 
 ```bash
-export SERVERCHAN_SENDKEY=SCTxxxx
-export PAGEWATCH_WEBHOOK=https://your.api/hook
-pagewatch daemon
+# 例: 只盯"价格xx元"这段内容
+pagewatch add <url> --selector ".price" --compare "regex:价格.*?元" --name gpu
 ```
+
+## 通知配置
+
+| 渠道 | 启用方式 |
+|---|---|
+| `serverchan` | 配环境变量 `SERVERCHAN_SENDKEY`（[Server酱](https://sct.ftqq.com/)，推送到微信） |
+| `webhook` | 配环境变量 `PAGEWATCH_WEBHOOK`，变更时 POST `{"title", "content"}` JSON |
+| **自定义插件** | 把含 `send(title, content)` 函数的 `.py` 文件放到 `PAGEWATCH_HOME/plugins/` 下，文件名即渠道名 |
+
+不配任何渠道则打印到终端。`PAGEWATCH_NOTIFY=渠道1,渠道2` 可显式指定发哪些渠道。
+
+**自定义通知插件**（20 行接入 Telegram / 邮件 / 钉钉等任意渠道，无需改核心代码）：
+
+```python
+# 文件: ~/.pagewatch/plugins/telegram.py
+import os
+import requests
+
+def send(title: str, content: str) -> None:
+    requests.post(
+        f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
+        json={"chat_id": os.environ["TG_CHAT_ID"], "text": f"{title}\n{content}"},
+        timeout=10,
+    )
+```
+
+保存后立即生效，变更会自动推送到 telegram 渠道；插件报错只记日志，不影响其他渠道。
 
 ## 数据存储
 
@@ -99,10 +129,11 @@ export PAGEWATCH_HOME=/path/to/your/dir
 ## Roadmap
 
 - [x] v0.1: add/list/remove/check/daemon + Server酱/Webhook 通知
-- [ ] 邮件 / Telegram 通知渠道
+- [x] v0.2: 对比策略（raw/norm/num/regex）+ 通知渠道插件目录
+- [ ] JSON / RSS 数据源（盯 API 返回值）
+- [ ] 变更动作钩子（`--on-change` 执行任意命令）
 - [ ] GitHub Action 版（push 驱动，无需常驻进程）
 - [ ] 变更 diff 高亮输出（只推送改了的那几行）
-- [ ] 数字提取模式（只盯价格数值，忽略页面其他文字变动）
 
 ## 开发
 
