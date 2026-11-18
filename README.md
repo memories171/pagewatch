@@ -35,7 +35,7 @@ pagewatch daemon
 pip install pagewatch
 
 # 或从源码安装
-git clone https://github.com/<you>/pagewatch.git
+git clone https://github.com/memories171/pagewatch.git
 cd pagewatch
 pip install -e .
 ```
